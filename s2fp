@@ -1,0 +1,110 @@
+#!/bin/python
+
+#
+# Copyright (c) 2021 Vasile Vilvoiu <vasi@vilvoiu.ro>
+#
+# This is free software; you can redistribute it and/or modify
+# it under the terms of the MIT license. See LICENSE for details.
+#
+
+import sys
+import argparse
+import re
+import urllib.request as req
+import gzip
+import json
+
+
+class ProjectRuleConcatAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        current = getattr(namespace, self.dest)
+        new = {'action': 'project', 'expression': values}
+        if current is None:
+            current = [new]
+        else:
+            current.append(new)
+        setattr(namespace, self.dest, current)
+
+
+class RejectRuleConcatAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        current = getattr(namespace, self.dest)
+        new = {'action': 'reject', 'expression': values}
+        if current is None:
+            current = [new]
+        else:
+            current.append(new)
+        setattr(namespace, self.dest, current)
+
+
+def project(object, rules):
+    nobject = {}
+    for key in object.keys():
+        project = True
+        for rule in rules:
+            kpass = re.search(rule['compiled'], key)
+            if kpass:
+                if rule['action'] == 'reject':
+                    project = False
+                elif rule['action'] == 'project':
+                    project = True
+                else:
+                    raise Exception('unknown action {}'.format(rule['action']))
+        if project:
+            nobject[key] = object[key]
+    return nobject
+
+
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Filter-projector for semantic scholar entries')
+    parser.add_argument('corpus', type=str, help='corpus directory URL (where manifest file is found)')
+    parser.add_argument('--archive-regex', type=str, help='regex to match against archive filenames before processing',
+                        default='s2[-]corpus[-][1-9]?[0-9]{3}[.]gz')
+    parser.add_argument('-p', '--project', action=ProjectRuleConcatAction,
+                        help='field projection rule (may be repeated)', dest='prules')
+    parser.add_argument('-r', '--reject', action=RejectRuleConcatAction,
+                        help='field rejection rule (may be repeated)', dest='prules')
+    args = parser.parse_args()
+
+    # Compile projection regexp list
+    projection_rules = []
+    if args.prules is not None:
+        for r in args.prules:
+            rule = r.copy()
+            rule['compiled'] = re.compile(rule['expression'])
+            projection_rules.append(rule)
+
+    # Load manifest file
+    archives = []
+    if args.corpus[-1] != '/':
+        args.corpus += '/'
+    manifest = req.urlopen(args.corpus + "manifest.txt")
+    for line in manifest:
+        arfn = line.decode('utf-8').strip()
+        if re.search(args.archive_regex, arfn):
+            archives.append(args.corpus + arfn)
+            print('Will look in archive {} ...'.format(archives[-1]), file=sys.stderr)
+
+    # For each archive
+    for arfn in archives:
+        try:
+            archive = req.urlopen(arfn).read()
+            lines = gzip.decompress(archive).decode('utf-8').split('\n')
+            # For each object
+            for line in lines:
+                if line.strip() == '':
+                    continue
+                try:
+                    object = json.loads(line)
+                    pobject = project(object, projection_rules)
+                    jpobject = json.dumps(pobject)
+                    print(jpobject)
+                except:
+                    print('Failed to load object: {}'.format(line), file=sys.stderr)
+        except Exception as e:
+            print('Unexpected failure in archive {}: {}'.format(arfn, str(e)), file=sys.stderr)
+
+
+if __name__ == '__main__':
+    main()
