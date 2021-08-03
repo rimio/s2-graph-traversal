@@ -8,16 +8,86 @@
 #
 
 import argparse
+import s2util
+import re
 import sys
+import sortedcontainers as sc
+import struct
+import os
+
+
+class IndexerIterator(s2util.ObjectIterator):
+    def __init__(self, archive_urls):
+        super().__init__(archive_urls)
+        self.arno_regex = re.compile('.*s2[-]corpus[-]([1-9]?[0-9]{3})[.]gz')
+        self.arno_last_url = ''
+        self.archive_no = 0
+        self.primary_index = sc.SortedDict()
+        self.secondary_indexes = {}
+
+    def process(self, obj, archive_url, object_no):
+        # Extract archive number from url
+        if self.arno_last_url != archive_url:
+            match = re.search(self.arno_regex, archive_url)
+            if match is None:
+                print('Failed to extract archive_no from archive URL {} object_no {}'.format(archive_url, object_no),
+                      file=sys.stderr)
+                return
+            self.archive_no = int(match.group(1))
+            self.arno_last_url = archive_url
+        # Extract long id form object
+        long_id = bytes.fromhex(obj['id'])
+        assert len(long_id) == 20
+        # Pack location
+        location = struct.pack('!II', self.archive_no, object_no)
+        # Add to primary index
+        self.primary_index[long_id] = location
+        # Add to secondary indexes
+        for fos in obj['fieldsOfStudy']:
+            if fos in self.secondary_indexes.keys():
+                self.secondary_indexes[fos][long_id] = location
+            else:
+                self.secondary_indexes[fos] = sc.SortedDict({long_id:location})
+
+
+def index_to_file(index, fn):
+    print('Writing {} ...'.format(fn))
+    file = open(fn, 'wb')
+    for k, v in index.items():
+        file.write(k)
+        file.write(v)
+    file.close()
 
 
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Indexing tool for S2 corpus')
     parser.add_argument('corpus', type=str, help='corpus directory URL (where manifest.txt file is found)')
+    parser.add_argument('outdir', type=str, nargs='?', default='.', help='output directory where indexes are generated')
     parser.add_argument('--archive-regex', type=str, help='regex to match against archive filenames before processing',
                         default='s2[-]corpus[-][1-9]?[0-9]{3}[.]gz')
     args = parser.parse_args()
+
+    # Load archives of interest
+    archive_urls = s2util.fetch_archive_urls(args.corpus, args.archive_regex)
+
+    # Index objects
+    indexer = IndexerIterator(archive_urls)
+    indexer.iterate()
+
+    # Print some statistics
+    print('')
+    print('Index generation done:')
+    print(' *', 'Primary', len(indexer.primary_index))
+    for sub, idx in indexer.secondary_indexes.items():
+        print(' *', ''.join(x for x in sub if x.isalnum()), len(idx))
+    print('')
+
+    # Dump to file
+    index_to_file(indexer.primary_index, os.path.join(args.outdir, 'Primary.index'))
+    for sub, idx in indexer.secondary_indexes.items():
+        safe_name = ''.join(x for x in sub if x.isalnum())
+        index_to_file(idx, os.path.join(args.outdir, '{}.index'.format(safe_name)))
 
 
 if __name__ == '__main__':

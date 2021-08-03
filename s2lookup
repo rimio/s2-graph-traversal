@@ -1,0 +1,40 @@
+#!/bin/python
+
+#
+# Copyright (c) 2021 Vasile Vilvoiu <vasi@vilvoiu.ro>
+#
+# This is free software; you can redistribute it and/or modify
+# it under the terms of the MIT license. See LICENSE for details.
+#
+
+import argparse
+import s2util
+
+
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Lookup tool for S2 corpus')
+    parser.add_argument('index', type=str, help='index to look into')
+    parser.add_argument('id', type=str, nargs='+', help='40-character (20-bytes) hex identifiers')
+    args = parser.parse_args()
+
+    index = s2util.SearchableIndex(args.index)
+    for long_id in args.id:
+        # Parse ID
+        try:
+            bytes_id = bytes.fromhex(long_id)
+            assert len(bytes_id) == 20
+        except:
+            print('{}: id parse error'.format(long_id))
+            continue
+
+        # Look it up
+        archive_num, object_num = index.lookup(bytes_id)
+        if archive_num is not None and object_num is not None:
+            print('{}: {} {}'.format(long_id, archive_num, object_num))
+        else:
+            print('{}: not found'.format(long_id))
+
+
+if __name__ == '__main__':
+    main()

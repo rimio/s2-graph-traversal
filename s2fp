@@ -10,9 +10,8 @@
 import sys
 import argparse
 import re
-import urllib.request as req
-import gzip
 import json
+import s2util
 
 
 class ProjectRuleConcatAction(argparse.Action):
@@ -55,6 +54,17 @@ def project(object, rules):
     return nobject
 
 
+class ProjectionIterator(s2util.ObjectIterator):
+    def __init__(self, archive_urls, rules):
+        super().__init__(archive_urls)
+        self.rules = rules
+
+    def process(self, obj, archive_url, object_no):
+        pobj = project(obj, self.rules)
+        jpobj = json.dumps(pobj)
+        print(jpobj)
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Filter-projector for semantic scholar entries')
@@ -75,35 +85,11 @@ def main():
             rule['compiled'] = re.compile(rule['expression'])
             projection_rules.append(rule)
 
-    # Load manifest file
-    archives = []
-    if args.corpus[-1] != '/':
-        args.corpus += '/'
-    manifest = req.urlopen(args.corpus + "manifest.txt")
-    for line in manifest:
-        arfn = line.decode('utf-8').strip()
-        if re.search(args.archive_regex, arfn):
-            archives.append(args.corpus + arfn)
-            print('Will look in archive {} ...'.format(archives[-1]), file=sys.stderr)
+    # Load archives of interest
+    archive_urls = s2util.fetch_archive_urls(args.corpus, args.archive_regex)
 
-    # For each archive
-    for arfn in archives:
-        try:
-            archive = req.urlopen(arfn).read()
-            lines = gzip.decompress(archive).decode('utf-8').split('\n')
-            # For each object
-            for line in lines:
-                if line.strip() == '':
-                    continue
-                try:
-                    object = json.loads(line)
-                    pobject = project(object, projection_rules)
-                    jpobject = json.dumps(pobject)
-                    print(jpobject)
-                except:
-                    print('Failed to load object: {}'.format(line), file=sys.stderr)
-        except Exception as e:
-            print('Unexpected failure in archive {}: {}'.format(arfn, str(e)), file=sys.stderr)
+    # Filter and print to stdout
+    ProjectionIterator(archive_urls, projection_rules).iterate()
 
 
 if __name__ == '__main__':
