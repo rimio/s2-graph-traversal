@@ -11,6 +11,7 @@ import gzip
 import json
 import sys
 import struct
+import sortedcontainers as sc
 
 
 def fetch_archive_urls(corpus_url, regex):
@@ -62,6 +63,22 @@ class SearchableIndex:
         # Check size
         assert len(self.data) % 28 == 0
         self.count = len(self.data) // 28
+
+    def size(self):
+        return len(self.data) // 28
+
+    def span(self):
+        archs = sc.SortedDict()
+        for current in range(self.size()):
+            # Fetch location
+            location = bytes(self.data[(current * 28 + 20):(current * 28 + 28)])
+            an, _ = struct.unpack("!II", location)
+            # Add to span
+            if an in archs.keys():
+                archs[an] += 1
+            else:
+                archs[an] = 1
+        return archs
 
     def lookup(self, long_id):
         location = None

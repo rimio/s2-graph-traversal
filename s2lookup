@@ -13,7 +13,7 @@ import s2util
 
 def main():
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Lookup tool for S2 corpus')
+    parser = argparse.ArgumentParser(description='Lookup tool for S2 corpus index')
     parser.add_argument('index', type=str, help='index to look into')
     parser.add_argument('id', type=str, nargs='+', help='40-character (20-bytes) hex identifiers')
     args = parser.parse_args()

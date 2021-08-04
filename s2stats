@@ -1,0 +1,31 @@
+#!/bin/python
+
+#
+# Copyright (c) 2021 Vasile Vilvoiu <vasi@vilvoiu.ro>
+#
+# This is free software; you can redistribute it and/or modify
+# it under the terms of the MIT license. See LICENSE for details.
+#
+
+import argparse
+import s2util
+
+
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Statistic tool for S2 corpus index')
+    parser.add_argument('index', type=str, help='index to look into')
+    parser.add_argument('statistic', type=str, choices=['size', 'span'], help='statistic to compute on index')
+    args = parser.parse_args()
+
+    index = s2util.SearchableIndex(args.index)
+    if args.statistic == 'size':
+        print(index.size())
+    elif args.statistic == 'span':
+        span = index.span()
+        for k, v in span.items():
+            print('{}: {}'.format(k, v))
+
+
+if __name__ == '__main__':
+    main()
