@@ -17,8 +17,8 @@ import os
 
 
 class IndexerIterator(s2util.ObjectIterator):
-    def __init__(self, archive_urls):
-        super().__init__(archive_urls)
+    def __init__(self, provider):
+        super().__init__(provider)
         self.arno_regex = re.compile('.*s2[-]corpus[-]([1-9]?[0-9]{3})[.]gz')
         self.arno_last_url = ''
         self.archive_no = 0
@@ -70,9 +70,10 @@ def main():
 
     # Load archives of interest
     archive_urls = s2util.fetch_archive_urls(args.corpus, args.archive_regex)
+    provider = s2util.SequentialObjectProvider(archive_urls)
 
     # Index objects
-    indexer = IndexerIterator(archive_urls)
+    indexer = IndexerIterator(provider)
     indexer.iterate()
 
     # Print some statistics

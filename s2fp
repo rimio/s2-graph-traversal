@@ -7,11 +7,12 @@
 # it under the terms of the MIT license. See LICENSE for details.
 #
 
-import sys
 import argparse
 import re
 import json
 import s2util
+import sys
+import munch
 
 
 class ProjectRuleConcatAction(argparse.Action):
@@ -36,33 +37,37 @@ class RejectRuleConcatAction(argparse.Action):
         setattr(namespace, self.dest, current)
 
 
-def project(object, rules):
-    nobject = {}
-    for key in object.keys():
-        project = True
-        for rule in rules:
-            kpass = re.search(rule['compiled'], key)
-            if kpass:
-                if rule['action'] == 'reject':
-                    project = False
-                elif rule['action'] == 'project':
-                    project = True
-                else:
-                    raise Exception('unknown action {}'.format(rule['action']))
-        if project:
-            nobject[key] = object[key]
-    return nobject
-
-
 class ProjectionIterator(s2util.ObjectIterator):
-    def __init__(self, archive_urls, rules):
-        super().__init__(archive_urls)
+    def __init__(self, provider, rules, filter):
+        super().__init__(provider)
         self.rules = rules
+        self.filter = filter
+
+    def project(self, obj):
+        nobject = {}
+        for key in obj.keys():
+            project = True
+            for rule in self.rules:
+                kpass = re.search(rule['compiled'], key)
+                if kpass:
+                    if rule['action'] == 'reject':
+                        project = False
+                    elif rule['action'] == 'project':
+                        project = True
+                    else:
+                        raise Exception('unknown action {}'.format(rule['action']))
+            if project:
+                nobject[key] = obj[key]
+        return nobject
 
     def process(self, obj, archive_url, object_no):
-        pobj = project(obj, self.rules)
-        jpobj = json.dumps(pobj)
-        print(jpobj)
+        try:
+            pred_eval = eval(self.filter, {'re': re}, {'r': munch.Munch.fromDict(obj)})
+        except Exception as e:
+            print('Predicate evaluation failed: {}'.format(e), file=sys.stderr)
+            pred_eval = False
+        if pred_eval:
+            print(json.dumps(self.project(obj)))
 
 
 def main():
@@ -71,11 +76,21 @@ def main():
     parser.add_argument('corpus', type=str, help='corpus directory URL (where manifest file is found)')
     parser.add_argument('--archive-regex', type=str, help='regex to match against archive filenames before processing',
                         default='s2[-]corpus[-][1-9]?[0-9]{3}[.]gz')
+    parser.add_argument('--index', type=str, default=None, help='path to index used for iteration')
     parser.add_argument('-p', '--project', action=ProjectRuleConcatAction,
                         help='field projection rule (may be repeated)', dest='prules')
     parser.add_argument('-r', '--reject', action=RejectRuleConcatAction,
                         help='field rejection rule (may be repeated)', dest='prules')
+    parser.add_argument('-f', '--filter', default='True',
+                        help='filter expression (written in Python, the object is named "r", dot-accessible via munch)')
     args = parser.parse_args()
+
+    # Load infex
+    if args.index is not None:
+        provider = s2util.IndexObjectProvider(s2util.SearchableIndex(args.index), args.corpus)
+    else:
+        archive_urls = s2util.fetch_archive_urls(args.corpus, args.archive_regex)
+        provider = s2util.SequentialObjectProvider(archive_urls)
 
     # Compile projection regexp list
     projection_rules = []
@@ -85,11 +100,11 @@ def main():
             rule['compiled'] = re.compile(rule['expression'])
             projection_rules.append(rule)
 
-    # Load archives of interest
-    archive_urls = s2util.fetch_archive_urls(args.corpus, args.archive_regex)
+    # Compile filter expression
+    filter_expr = compile(args.filter, 'expr', 'eval')
 
     # Filter and print to stdout
-    ProjectionIterator(archive_urls, projection_rules).iterate()
+    ProjectionIterator(provider, projection_rules, filter_expr).iterate()
 
 
 if __name__ == '__main__':

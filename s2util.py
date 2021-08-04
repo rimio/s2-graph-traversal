@@ -27,31 +27,112 @@ def fetch_archive_urls(corpus_url, regex):
     return archives
 
 
-class ObjectIterator:
+class ObjectProvider:
+    def __init__(self):
+        pass
+
+    def next(self):
+        raise NotImplementedError('call to abstract method next()')
+
+
+class SequentialObjectProvider(ObjectProvider):
     def __init__(self, archive_urls):
+        super().__init__()
         self.archive_urls = archive_urls
+        self.current_archive = None
+        self.current_lines = []
+        self.current_line_no = 0
+
+    def load_archive(self, url):
+        print('Iterating over {} ...'.format(url), file=sys.stderr)
+        self.current_archive = url
+        archive = req.urlopen(url).read()
+        self.current_lines = gzip.decompress(archive).decode('utf-8').split('\n')
+        if self.current_lines[-1] == '':
+            self.current_lines.pop()
+        self.current_line_no = 0
+
+    def next(self):
+        if self.current_line_no >= len(self.current_lines):
+            if len(self.archive_urls) > 0:
+                try:
+                    self.load_archive(self.archive_urls[0])
+                    self.archive_urls = self.archive_urls[1:]
+                except Exception as e:
+                    print('Unexpected failure in archive {}: {}'.format(self.current_archive, str(e)),
+                          file=sys.stderr)
+                    return None, None, None
+            else:
+                return None, None, None
+        if self.current_line_no < len(self.current_lines):
+            line = self.current_lines[self.current_line_no]
+            self.current_line_no += 1
+            return json.loads(line), self.current_archive, self.current_line_no-1
+        else:
+            # End of archives
+            return None, None, None
+
+
+class IndexObjectProvider(ObjectProvider):
+    def __init__(self, index, corpus_url):
+        super().__init__()
+        self.index = index
+        self.corpus_url = corpus_url
+        if self.corpus_url[-1] != '/':
+            self.corpus_url += '/'
+        self.span = list(self.index.span().keys())
+        self.object_offsets = []
+        self.lines = []
+        self.current_archive = None
+        self.current_an = -1
+
+    def load_archive(self, archive_no):
+        self.object_offsets = self.index.all_offsets(self.current_an)
+
+        if archive_no < 1000:
+            url = self.corpus_url + 's2-corpus-{:03}.gz'.format(archive_no)
+        else:
+            url = self.corpus_url + 's2-corpus-{:04}.gz'.format(archive_no)
+        self.current_archive = url
+        print('Picking objects from {} ...'.format(url), file=sys.stderr)
+
+        archive = req.urlopen(url).read()
+        self.lines = gzip.decompress(archive).decode('utf-8').split('\n')
+        if self.lines[-1] == '':
+            self.lines.pop()
+
+    def next(self):
+        # Next archive?
+        if len(self.object_offsets) == 0:
+            if len(self.span) == 0:
+                return None, None, None
+            self.current_an = self.span[0]
+            self.span = self.span[1:]
+            self.load_archive(self.current_an)
+        # Load object
+        current_on = self.object_offsets.pop()
+        return json.loads(self.lines[current_on]), self.current_archive, current_on
+
+
+class ObjectIterator:
+    def __init__(self, provider):
+        self.provider = provider
+        pass
 
     def process(self, obj, archive_url, object_no):
         raise NotImplementedError("Abstract method process() called")
 
     def iterate(self):
-        for arfn in self.archive_urls:
-            try:
-                print('Iterating over {} ...'.format(arfn), file=sys.stderr)
-                archive = req.urlopen(arfn).read()
-                lines = gzip.decompress(archive).decode('utf-8').split('\n')
-                # For each object
-                line_no = 0
-                for line in lines:
-                    if line.strip() == '':
-                        continue
-                    try:
-                        self.process(json.loads(line), arfn, line_no)
-                    except:
-                        print('Failed to process object: {}'.format(line), file=sys.stderr)
-                    line_no += 1
-            except Exception as e:
-                print('Unexpected failure in archive {}: {}'.format(arfn, str(e)), file=sys.stderr)
+        while True:
+            obj, ar, on = self.provider.next()
+            if obj is not None:
+                try:
+                    self.process(obj, ar, on)
+                except Exception as e:
+                    print('Failed to process object {}@{}'.format(ar, on),
+                          file=sys.stderr)
+            else:
+                break
 
 
 class SearchableIndex:
@@ -79,6 +160,16 @@ class SearchableIndex:
             else:
                 archs[an] = 1
         return archs
+
+    def all_offsets(self, archive_no):
+        offsets = []
+        for current in range(self.size()):
+            # Fetch location
+            location = bytes(self.data[(current * 28 + 20):(current * 28 + 28)])
+            an, on = struct.unpack("!II", location)
+            if an == archive_no:
+                offsets.append(on)
+        return offsets
 
     def lookup(self, long_id):
         location = None
