@@ -69,7 +69,7 @@ class SearchableIndex:
         lower_bound = 0
         upper_bound = self.count - 1
         while True:
-            if lower_bound >= upper_bound:
+            if lower_bound > upper_bound:
                 break
             current = (lower_bound + upper_bound) // 2
             key = bytes(self.data[(current*28):(current*28+20)])
@@ -77,9 +77,9 @@ class SearchableIndex:
                 location = bytes(self.data[(current*28+20):(current*28+28)])
                 break
             elif key < long_id:
-                lower_bound = current
+                lower_bound = current+1
             else:
-                upper_bound = current
+                upper_bound = current-1
         # Parse location
         if location is not None:
             an, on = struct.unpack("!II", location)
